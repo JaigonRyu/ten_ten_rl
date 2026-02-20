@@ -47,12 +47,12 @@ class TenTenEnv(gym.Env):
   
 
     def _decode_action(self, action):
-        action = int(action)
-        piece_index = action // 100
-        rem = action % 100
-        row = rem // 10
-        col = rem % 10
-        return piece_index, row, col
+        a = int(action)
+        pi = a // self.actions_per_piece
+        rem = a % self.actions_per_piece
+        r = rem // self.N
+        c = rem % self.N
+        return pi, r, c 
 
     def _encode_hand_masks(self):
         masks = np.zeros((self.hand_size, self.mask_size, self.mask_size), dtype=np.uint8)
