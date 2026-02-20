@@ -1,11 +1,12 @@
 # Getting Started
 
-Clone Repo:
+**Clone Repo**:
+
 `git clone https://github.com/JaigonRyu/ten_ten_rl.git`
 
 `cd ten_ten_rl`
 
-Create Virtual Envrioment (using conda):
+**Create Virtual Envrioment (using conda)**:
 
 `conda create -n ten_ten_env python=3.10`
 
@@ -13,40 +14,20 @@ Create Virtual Envrioment (using conda):
 
 `pip install -r requirements.txt`
 
-Code to run random baseline and random and greedy scripts from terminal:
+**Code to run random baseline and random and greedy scripts from terminal** :
 
-(easiest to start with)
 `python -m ten_ten_rl.scripts.random_play`
+
+- (easiest to start with)ß
 
 `python -m ten_ten_rl.scripts.greedy_play`
 
 
-
 **Note**: I am running the commands in the terminal from a file path up. So I have ten_ten_rl in a DSC291 file. I am in the DSC291 file when I rum the commands. 
-
-
-## File Path Layout
-
-ten_ten_rl/
-  core/
-    __init__.py
-    board.py
-    bag.py
-    pieces.py
-    game.py
-  env/
-    __init__.py
-    ten_ten_env.py
-  scripts/
-    greedy_play.py
-    random_play.py
-  README.md
-  requirements.txt
-
 
 ## Core Folder
 
-**pieces.py**
+### pieces.py
 
 **Note**: Pieces are defined relative to the (0,0) coordinate and anchored there then it is moved to the correct area and placed in other functions.
 
@@ -70,7 +51,7 @@ PIECE_LIBRARY: list of all pieces allowed in the game.
 
 PIECE_BY_ID: convenience dict for lookup by id.
 
-**board.py**
+### board.py 
 
 Board.grid: array of shape (size, size) with values {0,1}
 
@@ -107,7 +88,7 @@ Board.copy() / Board.to_ascii():
 
 - utilities for search (greedy/minimax simulation) and debugging.
 
-**bag.py** (We can add the adversary here!)
+### bag.py  (We can add the adversary here!)
 
 Random piece sampler
 
@@ -119,7 +100,7 @@ draw_one() and draw_hand(k=3)
 
 reseed(seed) for reproducible episodes (can remove later if needed)
 
-**game.py** 
+### game.py 
 
 Controls turns, hand management, scoring, and terminal condition.
 
@@ -187,13 +168,13 @@ action_mask():
 
 ## Scripts
 
-ten_ten_rl/scripts/random_play.py
+**ten_ten_rl/scripts/random_play.py**
 
 - Random baseline using env.action_mask() to avoid invalid actions.
 
 - Runs multiple episodes and prints average score.
 
-ten_ten_rl/scripts/greedy_play.py
+**ten_ten_rl/scripts/greedy_play.py**
 
 For each legal move:
 
