@@ -1,4 +1,5 @@
 import argparse
+import math
 import random
 import time
 
@@ -15,14 +16,18 @@ from ten_ten_rl.core.game import Game
 from ten_ten_rl.core.pieces import PIECE_LIBRARY
 from ten_ten_rl.env.ten_ten_env import TenTenEnv
 
-import wandb
+# Optional: wandb only if tracking is enabled
+try:
+    import wandb  # type: ignore
+except ImportError:
+    wandb = None
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
     parser.add_argument("--total-timesteps", type=int, default=50_000_000)
     parser.add_argument("--learning-rate", type=float, default=5e-3)
-    parser.add_argument("--learning-rate-end", type=float, default=3e-4)
+    parser.add_argument("--learning-rate-end", type=float, default=3e-5)
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--num-steps", type=int, default=256)
     parser.add_argument("--num-minibatches", type=int, default=8)
@@ -30,17 +35,27 @@ def parse_args():
     parser.add_argument("--track", action="store_false")
     parser.add_argument("--wandb-project", type=str, default="tenten-ppo")
     parser.add_argument("--wandb-entity", type=str, default=None)
-    #parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--clip-coef", type=float, default=0.2)
-    parser.add_argument("--ent-coef", type=float, default=0.1)
-    parser.add_argument("--ent-coef-end", type=float, default=0.02)
+    parser.add_argument("--ent-coef", type=float, default=0.1)  # 0.05
+    parser.add_argument("--ent-coef-end", type=float, default=0.01)
     parser.add_argument("--anneal-ent", action="store_false")
     parser.add_argument("--vf-coef", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--target-kl", type=float, default=0.04)
-    parser.add_argument("--anneal-lr", action="store_false")
+    parser.add_argument("--target-kl", type=float, default=0.02)
+    parser.add_argument(
+        "--lr-schedule",
+        type=str,
+        choices=["linear", "cosine", "none"],
+        default="cosine",
+    )
+    parser.add_argument(
+        "--ent-schedule",
+        type=str,
+        choices=["linear", "cosine", "none"],
+        default="cosine",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cuda", action="store_false")
     parser.add_argument("--save-path", type=str, default="ppo_tenten.pt")
@@ -78,7 +93,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_size=1024):
+    def __init__(self, obs_dim, action_dim, hidden_size=1024):  # 512
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
@@ -111,7 +126,14 @@ class Agent(nn.Module):
         logprob = probs.log_prob(action)
         entropy = probs.entropy()
         return action, logprob, entropy, self.critic(hidden)
-
+    
+def schedule(schedule_type, begin, end, progress):
+    if schedule_type == "linear":
+        return begin + (end - begin) * progress
+    elif schedule_type == "cosine":
+        return begin + 0.5 * (end - begin) * (1.0 + math.cos(math.pi * progress))
+    else:
+        return begin
 
 def main():
     args = parse_args()
@@ -140,6 +162,8 @@ def main():
     run_name = f"tenten_ppo_seed{args.seed}_{int(time.time())}"
 
     if args.track:
+        if wandb is None:
+            raise ImportError("Install wandb or disable --track")
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
@@ -165,19 +189,10 @@ def main():
     for update in range(1, num_updates + 1):
         episode_lengths = []
         episode_returns = []
-        if args.anneal_lr:
-            frac = 1.0 - (update - 1.0) / num_updates
-            lrnow = (
-                args.learning_rate_end
-                + (args.learning_rate - args.learning_rate_end) * frac
-            )
-            optimizer.param_groups[0]["lr"] = lrnow
-        ent_coef_now = args.ent_coef
-        if args.anneal_ent:
-            frac = 1.0 - (update - 1.0) / num_updates
-            ent_coef_now = (
-                args.ent_coef_end + (args.ent_coef - args.ent_coef_end) * frac
-            )
+        progress = (update - 1.0) / max(num_updates - 1, 1)
+        lrnow = schedule(args.lr_schedule, args.learning_rate_end, args.learning_rate, progress)
+        optimizer.param_groups[0]["lr"] = lrnow
+        ent_coef_now = schedule(args.ent_schedule, args.ent_coef_end, args.ent_coef, progress)
 
         for step in range(args.num_steps):
             obs_t = flatten_obs(next_obs).to(device)
