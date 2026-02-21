@@ -19,15 +19,17 @@ from ten_ten_rl.env.ten_ten_env import TenTenEnv
 def parse_args():
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
     parser.add_argument("--total-timesteps", type=int, default=50_000_000)
-    parser.add_argument("--learning-rate", type=float, default=5e-3)
+    parser.add_argument("--learning-rate", type=float, default=5e-4)
     parser.add_argument("--num-envs", type=int, default=32)
     parser.add_argument("--num-steps", type=int, default=256)
     parser.add_argument("--num-minibatches", type=int, default=4)
-    parser.add_argument("--update-epochs", type=int, default=3)
+    parser.add_argument("--update-epochs", type=int, default=6)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--clip-coef", type=float, default=0.2)
-    parser.add_argument("--ent-coef", type=float, default=0.05)
+    parser.add_argument("--ent-coef", type=float, default=0.1)
+    parser.add_argument("--ent-coef-end", type=float, default=0.02)
+    parser.add_argument("--anneal-ent", action="store_false")
     parser.add_argument("--vf-coef", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--target-kl", type=float, default=0.02)
@@ -62,17 +64,30 @@ def flatten_obs(obs):
     return board.view(board.shape[0], -1)
 
 
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+
 class Agent(nn.Module):
     def __init__(self, obs_dim, action_dim):
         super().__init__()
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
+        # MLP for flattened board + hand masks (dict observation)
         self.net = nn.Sequential(
-            nn.Linear(obs_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
+            layer_init(nn.Linear(obs_dim, 256)),
+            nn.GELU(),
+            layer_init(nn.Linear(256, 256)),
+            nn.GELU(),
+            layer_init(nn.Linear(256, 256)),
+            nn.GELU(),
+            layer_init(nn.Linear(256, 256)),
+            nn.GELU(),
         )
-        self.actor = nn.Linear(512, action_dim)
-        self.critic = nn.Linear(512, 1)
+        self.actor = layer_init(nn.Linear(256, action_dim), std=0.01)
+        self.critic = layer_init(nn.Linear(256, 1))
 
     def get_value(self, x):
         return self.critic(self.net(x))
@@ -131,10 +146,18 @@ def main():
     next_done = torch.zeros(args.num_envs, device=device)
 
     for update in range(1, num_updates + 1):
+        episode_lengths = []
+        episode_returns = []
         if args.anneal_lr:
             frac = 1.0 - (update - 1.0) / num_updates
             lrnow = frac * args.learning_rate
             optimizer.param_groups[0]["lr"] = lrnow
+        ent_coef_now = args.ent_coef
+        if args.anneal_ent:
+            frac = 1.0 - (update - 1.0) / num_updates
+            ent_coef_now = (
+                args.ent_coef_end + (args.ent_coef - args.ent_coef_end) * frac
+            )
 
         for step in range(args.num_steps):
             obs_t = flatten_obs(next_obs).to(device)
@@ -164,14 +187,16 @@ def main():
             rewards[step] = torch.as_tensor(reward, device=device)
 
             global_step += args.num_envs
-            # if "final_info" in infos:
-            #     for info in infos["final_info"]:
-            #         if info and "episode" in info:
-            #             ret = info["episode"]["r"]
-            #             length = info["episode"]["l"]
-            #             print(
-            #                 f"global_step={global_step}, return={ret}, length={length}"
-            #             )
+            if "final_info" in infos:
+                for info in infos["final_info"]:
+                    if info and "episode" in info:
+                        ret = info["episode"]["r"]
+                        length = info["episode"]["l"]
+                        episode_lengths.append(length)
+                        episode_returns.append(ret)
+                        # print(
+                        #     f"global_step={global_step}, return={ret}, length={length}"
+                        # )
 
         with torch.no_grad():
             next_value = agent.get_value(flatten_obs(next_obs).to(device)).reshape(
@@ -248,7 +273,7 @@ def main():
                 v_loss = 0.5 * torch.max(v_loss_unclipped, v_loss_clipped).mean()
 
                 entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
+                loss = pg_loss - ent_coef_now * entropy_loss + v_loss * args.vf_coef
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -274,7 +299,9 @@ def main():
             f"kl={approx_kl.item():.4f} "
             f"ev={explained_var:.3f} "
             f"SPS={sps} "
-            f"clipfrac={np.mean(clipfracs):.3f}"
+            f"clipfrac={np.mean(clipfracs):.3f} "
+            f"mean_ep_len={(np.mean(episode_lengths) if episode_lengths else float('nan')):.2f} "
+            f"mean_ep_ret={(np.mean(episode_returns) if episode_returns else float('nan')):.2f}"
         )
     fin_time = time.time()
     torch.save(agent.state_dict(), f"{fin_time}_{args.save_path}")
