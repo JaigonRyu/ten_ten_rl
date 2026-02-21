@@ -2,3 +2,4 @@ numpy>=1.23
 gymnasium==0.29
 pygame>=2.5
 torch==2.4.1
+wandb==0.25.0

@@ -15,15 +15,22 @@ from ten_ten_rl.core.game import Game
 from ten_ten_rl.core.pieces import PIECE_LIBRARY
 from ten_ten_rl.env.ten_ten_env import TenTenEnv
 
+import wandb
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
     parser.add_argument("--total-timesteps", type=int, default=50_000_000)
-    parser.add_argument("--learning-rate", type=float, default=5e-4)
-    parser.add_argument("--num-envs", type=int, default=32)
+    parser.add_argument("--learning-rate", type=float, default=5e-3)
+    parser.add_argument("--learning-rate-end", type=float, default=3e-4)
+    parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--num-steps", type=int, default=256)
-    parser.add_argument("--num-minibatches", type=int, default=4)
-    parser.add_argument("--update-epochs", type=int, default=6)
+    parser.add_argument("--num-minibatches", type=int, default=8)
+    parser.add_argument("--update-epochs", type=int, default=3)
+    parser.add_argument("--track", action="store_false")
+    parser.add_argument("--wandb-project", type=str, default="tenten-ppo")
+    parser.add_argument("--wandb-entity", type=str, default=None)
+    #parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--clip-coef", type=float, default=0.2)
@@ -32,7 +39,7 @@ def parse_args():
     parser.add_argument("--anneal-ent", action="store_false")
     parser.add_argument("--vf-coef", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--target-kl", type=float, default=0.02)
+    parser.add_argument("--target-kl", type=float, default=0.04)
     parser.add_argument("--anneal-lr", action="store_false")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cuda", action="store_false")
@@ -71,23 +78,24 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, obs_dim, action_dim):
+    def __init__(self, obs_dim, action_dim, hidden_size=1024):
         super().__init__()
         self.obs_dim = obs_dim
         self.action_dim = action_dim
+        self.hidden_size = hidden_size
         # MLP for flattened board + hand masks (dict observation)
         self.net = nn.Sequential(
-            layer_init(nn.Linear(obs_dim, 256)),
+            layer_init(nn.Linear(obs_dim, self.hidden_size)),
             nn.GELU(),
-            layer_init(nn.Linear(256, 256)),
+            layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
             nn.GELU(),
-            layer_init(nn.Linear(256, 256)),
-            nn.GELU(),
-            layer_init(nn.Linear(256, 256)),
-            nn.GELU(),
+            # layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
+            # nn.GELU(),
+            # layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
+            # nn.GELU(),
         )
-        self.actor = layer_init(nn.Linear(256, action_dim), std=0.01)
-        self.critic = layer_init(nn.Linear(256, 1))
+        self.actor = layer_init(nn.Linear(self.hidden_size, self.action_dim), std=0.01)
+        self.critic = layer_init(nn.Linear(self.hidden_size, 1))
 
     def get_value(self, x):
         return self.critic(self.net(x))
@@ -129,6 +137,15 @@ def main():
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
     num_updates = args.total_timesteps // batch_size
+    run_name = f"tenten_ppo_seed{args.seed}_{int(time.time())}"
+
+    if args.track:
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=run_name,
+            config=vars(args),
+        )
 
     obs_buf = torch.zeros((args.num_steps, args.num_envs, obs_dim), device=device)
     actions = torch.zeros((args.num_steps, args.num_envs), device=device)
@@ -150,7 +167,10 @@ def main():
         episode_returns = []
         if args.anneal_lr:
             frac = 1.0 - (update - 1.0) / num_updates
-            lrnow = frac * args.learning_rate
+            lrnow = (
+                args.learning_rate_end
+                + (args.learning_rate - args.learning_rate_end) * frac
+            )
             optimizer.param_groups[0]["lr"] = lrnow
         ent_coef_now = args.ent_coef
         if args.anneal_ent:
@@ -290,6 +310,9 @@ def main():
         var_y = np.var(y_true)
         explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
         sps = int(global_step / (time.time() - start_time))
+        mean_ep_len = np.mean(episode_lengths) if episode_lengths else float("nan")
+        mean_ep_ret = np.mean(episode_returns) if episode_returns else float("nan")
+        current_lr = optimizer.param_groups[0]["lr"]
         print(
             f"update={update}/{num_updates} "
             f"loss={loss.item():.3f} "
@@ -300,11 +323,36 @@ def main():
             f"ev={explained_var:.3f} "
             f"SPS={sps} "
             f"clipfrac={np.mean(clipfracs):.3f} "
-            f"mean_ep_len={(np.mean(episode_lengths) if episode_lengths else float('nan')):.2f} "
-            f"mean_ep_ret={(np.mean(episode_returns) if episode_returns else float('nan')):.2f}"
+            f"mean_ep_len={mean_ep_len:.2f} "
+            f"mean_ep_ret={mean_ep_ret:.2f} "
+            f"lr={current_lr:.6f}"
         )
+        if args.track:
+            wandb.log(
+                {
+                    "charts/global_step": global_step,
+                    "losses/total": loss.item(),
+                    "losses/pg": pg_loss.item(),
+                    "losses/vf": v_loss.item(),
+                    "losses/entropy": entropy_loss.item(),
+                    "losses/kl": approx_kl.item(),
+                    "losses/clipfrac": float(np.mean(clipfracs)),
+                    "losses/explained_variance": explained_var,
+                    "charts/SPS": sps,
+                    "charts/mean_ep_len": mean_ep_len,
+                    "charts/mean_ep_ret": mean_ep_ret,
+                    "charts/lr": current_lr,
+                    "charts/ent_coef": ent_coef_now,
+                },
+                step=global_step,
+            )
     fin_time = time.time()
-    torch.save(agent.state_dict(), f"{fin_time}_{args.save_path}")
+    mean_ep_ret = np.mean(episode_returns) if episode_returns else float("nan")
+    mean_ep_len = np.mean(episode_lengths) if episode_lengths else float("nan")
+    torch.save(
+        agent.state_dict(),
+        f"{mean_ep_ret:.2f}_{mean_ep_len:.2f}_{fin_time}_{args.save_path}",
+    )
     envs.close()
 
 
