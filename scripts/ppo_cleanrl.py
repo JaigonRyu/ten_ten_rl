@@ -33,9 +33,9 @@ def parse_args():
     # 2 layer 512 -> 0.7 ev @ 50M
     # 2 layer 256 -> ? ev
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
-    parser.add_argument("--total-timesteps", type=int, default=1_000_000_000)
-    parser.add_argument("--learning-rate", type=float, default=5e-3)
-    parser.add_argument("--learning-rate-end", type=float, default=3e-5)  # e-4/e-5
+    parser.add_argument("--total-timesteps", type=int, default=150_000_000)
+    parser.add_argument("--learning-rate", type=float, default=7.5e-3)
+    parser.add_argument("--learning-rate-end", type=float, default=1e-4)  # e-4/e-5
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--num-steps", type=int, default=256)
     parser.add_argument("--num-minibatches", type=int, default=8)
@@ -48,8 +48,8 @@ def parse_args():
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     # Policy clipping - increase if KL too high, decrease if clipfrac too high
     parser.add_argument("--clip-coef", type=float, default=0.25)  # 0.2
-    parser.add_argument("--ent-coef", type=float, default=0.10)  # 0.05
-    parser.add_argument("--ent-coef-end", type=float, default=0.01)
+    parser.add_argument("--ent-coef", type=float, default=0.1)  # 0.05
+    parser.add_argument("--ent-coef-end", type=float, default=0.02)
     parser.add_argument("--anneal-ent", action="store_false")
     parser.add_argument("--vf-coef", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
@@ -161,7 +161,7 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    envs = gym.vector.SyncVectorEnv(
+    envs = gym.vector.AsyncVectorEnv(
         [make_env(args.seed, i) for i in range(args.num_envs)]
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete)
@@ -217,6 +217,7 @@ def main():
         episode_lengths = []
         episode_returns = []
         episode_scores = []
+        rollout_start = time.time()
         progress = (update - 1.0) / max(num_updates - 1, 1)
         lrnow = schedule(
             args.lr_schedule, args.learning_rate, args.learning_rate_end, progress
@@ -290,6 +291,8 @@ def main():
                 advantages[t] = lastgaelam
             returns = advantages + values
 
+        rollout_end = time.time()
+
         b_obs = obs_buf.reshape((-1, obs_dim))
         b_actions = actions.reshape((-1,))
         b_logprobs = logprobs.reshape((-1,))
@@ -353,6 +356,10 @@ def main():
                 if args.target_kl and approx_kl > args.target_kl:
                     break
 
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        update_end = time.time()
+
         y_pred, y_true = (
             b_values.detach().cpu().numpy(),
             b_returns.detach().cpu().numpy(),
@@ -364,6 +371,8 @@ def main():
         mean_ep_ret = np.mean(episode_returns) if episode_returns else float("nan")
         mean_ep_score = np.mean(episode_scores) if episode_scores else float("nan")
         current_lr = optimizer.param_groups[0]["lr"]
+        rollout_time = rollout_end - rollout_start
+        update_time = update_end - rollout_end
         print(
             f"update={update}/{num_updates} "
             f"loss={loss.item():.3f} "
@@ -377,7 +386,9 @@ def main():
             f"mean_ep_len={mean_ep_len:.2f} "
             f"mean_ep_ret={mean_ep_ret:.2f} "
             f"mean_ep_score={mean_ep_score:.2f} "
-            f"lr={current_lr:.6f}"
+            f"lr={current_lr:.6f} "
+            f"rollout_t={rollout_time:.3f}s "
+            f"update_t={update_time:.3f}s"
         )
         if args.track:
             wandb.log(
@@ -396,6 +407,8 @@ def main():
                     "charts/mean_ep_score": mean_ep_score,
                     "charts/lr": current_lr,
                     "charts/ent_coef": ent_coef_now,
+                    "perf/rollout_time_s": rollout_time,
+                    "perf/update_time_s": update_time,
                 },
                 step=global_step,
             )
