@@ -1,5 +1,6 @@
+--extra-index-url https://download.pytorch.org/whl/cu118
 numpy>=1.23
 gymnasium==0.29
 pygame>=2.5
-torch==2.4.1
+torch==2.4.1+cu118
 wandb==0.25.0
