@@ -1,12 +1,13 @@
 # ten_ten/core/game.py
 
+
 class Game:
     """
-      - Holds board + current hand
-      - Applies actions (piece_index, r, c)
-      - Clears lines via Board.place()
-      - Refill hand when empty
-      - Detect terminal when no legal moves exist
+    - Holds board + current hand
+    - Applies actions (piece_index, r, c)
+    - Clears lines via Board.place()
+    - Refill hand when empty
+    - Detect terminal when no legal moves exist
     """
 
     def __init__(self, board, bag, hand_size=3):
@@ -26,7 +27,7 @@ class Game:
         return self.get_state()
 
     def get_state(self):
-        
+
         return {
             "board": self.board.grid.copy(),
             "hand_ids": [p.pid for p in self.hand],
@@ -42,10 +43,10 @@ class Game:
             self.hand = self.bag.draw_hand(self.hand_size)
 
     def has_any_moves(self):
-        
+
         size = self.board.size
         for piece in self.hand:
-     
+
             max_r = size - piece.height
             max_c = size - piece.width
             for r in range(max_r + 1):
@@ -80,20 +81,23 @@ class Game:
         Returns (state, reward, done, info)
         """
         if self.done:
-            raise RuntimeError("Cannot step() because game is already done. Call reset().")
+            raise RuntimeError(
+                "Cannot step() because game is already done. Call reset()."
+            )
 
         piece_index, r, c = action
 
-    
         if piece_index < 0 or piece_index >= len(self.hand):
             # Minimal behavior: treat as invalid action and end or penalize.
             # just raise to catch bugs early. Env wrapper can handle penalties later.
-            raise ValueError(f"Invalid piece_index {piece_index} for hand size {len(self.hand)}.")
+            raise ValueError(
+                f"Invalid piece_index {piece_index} for hand size {len(self.hand)}."
+            )
 
         piece = self.hand[piece_index]
 
         if not self.board.can_place(piece, r, c):
-           
+
             raise ValueError(f"Illegal move: {piece.pid} at ({r}, {c})")
 
         # Apply move on board
@@ -115,13 +119,17 @@ class Game:
         # - Bonus for clearing lines (rows+cols)
         # We can change this to see if different rewards are better.
         reward = place_info["placed_blocks"]
-        reward += 10 * (place_info["cleared_rows"] + place_info["cleared_cols"])
+        # Double line-clear bonus (was 10x)
+        clear_bonus = place_info["cleared_rows"] + place_info["cleared_cols"]
+        reward += 10 * clear_bonus
 
         self.score += reward
+        reward += 10 * clear_bonus
 
         info = {
             "piece_id": piece.pid,
             "place_info": place_info,
+            "score": self.score,
         }
 
         return self.get_state(), reward, self.done, info
