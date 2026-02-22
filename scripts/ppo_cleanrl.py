@@ -24,26 +24,35 @@ except ImportError:
 
 
 def parse_args():
+    # Next hyperparams to try:
+    # Increase hidden dim if explained variance low @ end
+    # LR + clipping vs model size
+    # vs ENT decay
+    # 0.005 kl, 0.05 clip, 70% ev @ 2k w/ 5e-3->3e-5, 2 layers @ 512, .1->0.01 ent voef, cosine, 0.2 clip coef, 3 update epochs
+    # entropy > 0.1 -> low returns
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
     parser.add_argument("--total-timesteps", type=int, default=50_000_000)
     parser.add_argument("--learning-rate", type=float, default=5e-3)
-    parser.add_argument("--learning-rate-end", type=float, default=3e-5)
+    parser.add_argument("--learning-rate-end", type=float, default=3e-4)
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--num-steps", type=int, default=256)
     parser.add_argument("--num-minibatches", type=int, default=8)
-    parser.add_argument("--update-epochs", type=int, default=3)
+    # Increasing could lower variance but risk overfitting, may raise KL/clipfrac
+    parser.add_argument("--update-epochs", type=int, default=6)
     parser.add_argument("--track", action="store_false")
     parser.add_argument("--wandb-project", type=str, default="tenten-ppo")
     parser.add_argument("--wandb-entity", type=str, default=None)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
-    parser.add_argument("--clip-coef", type=float, default=0.2)
-    parser.add_argument("--ent-coef", type=float, default=0.1)  # 0.05
+    # Policy clipping - increase if KL too high, decrease if clipfrac too high
+    parser.add_argument("--clip-coef", type=float, default=0.25)  # 0.2
+    parser.add_argument("--ent-coef", type=float, default=0.15)  # 0.05
     parser.add_argument("--ent-coef-end", type=float, default=0.01)
     parser.add_argument("--anneal-ent", action="store_false")
     parser.add_argument("--vf-coef", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--target-kl", type=float, default=0.02)
+    parser.add_argument("--target-kl", type=float, default=0.03)  # 0.02 before
+    parser.add_argument("--hidden-dim", type=int, default=512)
     parser.add_argument(
         "--lr-schedule",
         type=str,
@@ -126,14 +135,15 @@ class Agent(nn.Module):
         logprob = probs.log_prob(action)
         entropy = probs.entropy()
         return action, logprob, entropy, self.critic(hidden)
-    
+
+
 def schedule(schedule_type, begin, end, progress):
     if schedule_type == "linear":
         return begin + (end - begin) * progress
-    elif schedule_type == "cosine":
-        return begin + 0.5 * (end - begin) * (1.0 + math.cos(math.pi * progress))
-    else:
-        return begin
+    if schedule_type == "cosine":
+        return end + 0.5 * (begin - end) * (1.0 + math.cos(math.pi * progress))
+    return begin
+
 
 def main():
     args = parse_args()
@@ -153,13 +163,15 @@ def main():
     obs_dim = board_size + hand_size
     action_dim = envs.single_action_space.n
 
-    agent = Agent(obs_dim, action_dim).to(device)
+    agent = Agent(obs_dim, action_dim, args.hidden_dim).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     batch_size = args.num_envs * args.num_steps
     minibatch_size = batch_size // args.num_minibatches
     num_updates = args.total_timesteps // batch_size
-    run_name = f"tenten_ppo_seed{args.seed}_{int(time.time())}"
+    run_start_time = int(time.time())
+    # run name should be hyperparams
+    run_name = f"tenten_ppo_seed{args.seed}_update_epochs:{args.update_epochs}_hd:{args.hidden_dim}_lr:{args.lr_schedule}_{args.learning_rate}_{args.learning_rate_end}_ent:{args.ent_schedule}_{args.ent_coef}_{args.ent_coef_end}_{run_start_time}"
 
     if args.track:
         if wandb is None:
@@ -189,10 +201,15 @@ def main():
     for update in range(1, num_updates + 1):
         episode_lengths = []
         episode_returns = []
+        episode_scores = []
         progress = (update - 1.0) / max(num_updates - 1, 1)
-        lrnow = schedule(args.lr_schedule, args.learning_rate_end, args.learning_rate, progress)
+        lrnow = schedule(
+            args.lr_schedule, args.learning_rate, args.learning_rate_end, progress
+        )
         optimizer.param_groups[0]["lr"] = lrnow
-        ent_coef_now = schedule(args.ent_schedule, args.ent_coef_end, args.ent_coef, progress)
+        ent_coef_now = schedule(
+            args.ent_schedule, args.ent_coef, args.ent_coef_end, progress
+        )
 
         for step in range(args.num_steps):
             obs_t = flatten_obs(next_obs).to(device)
@@ -227,8 +244,11 @@ def main():
                     if info and "episode" in info:
                         ret = info["episode"]["r"]
                         length = info["episode"]["l"]
+                        score = info.get("score")
                         episode_lengths.append(length)
                         episode_returns.append(ret)
+                        if score is not None:
+                            episode_scores.append(score)
                         # print(
                         #     f"global_step={global_step}, return={ret}, length={length}"
                         # )
@@ -327,6 +347,7 @@ def main():
         sps = int(global_step / (time.time() - start_time))
         mean_ep_len = np.mean(episode_lengths) if episode_lengths else float("nan")
         mean_ep_ret = np.mean(episode_returns) if episode_returns else float("nan")
+        mean_ep_score = np.mean(episode_scores) if episode_scores else float("nan")
         current_lr = optimizer.param_groups[0]["lr"]
         print(
             f"update={update}/{num_updates} "
@@ -340,6 +361,7 @@ def main():
             f"clipfrac={np.mean(clipfracs):.3f} "
             f"mean_ep_len={mean_ep_len:.2f} "
             f"mean_ep_ret={mean_ep_ret:.2f} "
+            f"mean_ep_score={mean_ep_score:.2f} "
             f"lr={current_lr:.6f}"
         )
         if args.track:
@@ -356,17 +378,19 @@ def main():
                     "charts/SPS": sps,
                     "charts/mean_ep_len": mean_ep_len,
                     "charts/mean_ep_ret": mean_ep_ret,
+                    "charts/mean_ep_score": mean_ep_score,
                     "charts/lr": current_lr,
                     "charts/ent_coef": ent_coef_now,
                 },
                 step=global_step,
             )
-    fin_time = time.time()
+    # fin_time = time.time()
     mean_ep_ret = np.mean(episode_returns) if episode_returns else float("nan")
     mean_ep_len = np.mean(episode_lengths) if episode_lengths else float("nan")
+    mean_ep_score = np.mean(episode_scores) if episode_scores else float("nan")
     torch.save(
         agent.state_dict(),
-        f"{mean_ep_ret:.2f}_{mean_ep_len:.2f}_{fin_time}_{args.save_path}",
+        f"{mean_ep_ret:.2f}_{mean_ep_len:.2f}_{mean_ep_score:.2f}_{run_start_time}_{args.save_path}",
     )
     envs.close()
 
