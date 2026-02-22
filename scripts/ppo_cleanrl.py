@@ -30,10 +30,12 @@ def parse_args():
     # vs ENT decay
     # 0.005 kl, 0.05 clip, 70% ev @ 2k w/ 5e-3->3e-5, 2 layers @ 512, .1->0.01 ent voef, cosine, 0.2 clip coef, 3 update epochs
     # entropy > 0.1 -> low returns
+    # 2 layer 512 -> 0.7 ev @ 50M
+    # 2 layer 256 -> ? ev
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
-    parser.add_argument("--total-timesteps", type=int, default=50_000_000)
+    parser.add_argument("--total-timesteps", type=int, default=1_000_000_000)
     parser.add_argument("--learning-rate", type=float, default=5e-3)
-    parser.add_argument("--learning-rate-end", type=float, default=3e-4)
+    parser.add_argument("--learning-rate-end", type=float, default=3e-5)  # e-4/e-5
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--num-steps", type=int, default=256)
     parser.add_argument("--num-minibatches", type=int, default=8)
@@ -46,13 +48,13 @@ def parse_args():
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     # Policy clipping - increase if KL too high, decrease if clipfrac too high
     parser.add_argument("--clip-coef", type=float, default=0.25)  # 0.2
-    parser.add_argument("--ent-coef", type=float, default=0.15)  # 0.05
+    parser.add_argument("--ent-coef", type=float, default=0.10)  # 0.05
     parser.add_argument("--ent-coef-end", type=float, default=0.01)
     parser.add_argument("--anneal-ent", action="store_false")
     parser.add_argument("--vf-coef", type=float, default=0.3)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--target-kl", type=float, default=0.03)  # 0.02 before
-    parser.add_argument("--hidden-dim", type=int, default=512)
+    parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument(
         "--lr-schedule",
         type=str,
@@ -64,6 +66,12 @@ def parse_args():
         type=str,
         choices=["linear", "cosine", "none"],
         default="cosine",
+    )
+    parser.add_argument(
+        "--checkpoint-interval",
+        type=int,
+        default=50_000_000,
+        help="Save intermediate checkpoints every N timesteps when total-timesteps >= N",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cuda", action="store_false")
@@ -172,6 +180,13 @@ def main():
     run_start_time = int(time.time())
     # run name should be hyperparams
     run_name = f"tenten_ppo_seed{args.seed}_update_epochs:{args.update_epochs}_hd:{args.hidden_dim}_lr:{args.lr_schedule}_{args.learning_rate}_{args.learning_rate_end}_ent:{args.ent_schedule}_{args.ent_coef}_{args.ent_coef_end}_{run_start_time}"
+
+    checkpoint_interval = (
+        args.checkpoint_interval
+        if args.total_timesteps >= args.checkpoint_interval
+        else None
+    )
+    next_checkpoint = checkpoint_interval
 
     if args.track:
         if wandb is None:
@@ -384,6 +399,13 @@ def main():
                 },
                 step=global_step,
             )
+        if next_checkpoint is not None and global_step >= next_checkpoint:
+            ckpt_path = (
+                f"ckpt_step{global_step}_ret{mean_ep_ret:.2f}_score{mean_ep_score:.2f}_"
+                f"{run_start_time}_{args.save_path}"
+            )
+            torch.save(agent.state_dict(), ckpt_path)
+            next_checkpoint += checkpoint_interval
     # fin_time = time.time()
     mean_ep_ret = np.mean(episode_returns) if episode_returns else float("nan")
     mean_ep_len = np.mean(episode_lengths) if episode_lengths else float("nan")
