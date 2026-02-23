@@ -33,7 +33,7 @@ def parse_args():
     # 2 layer 512 -> 0.7 ev @ 50M
     # 2 layer 256 -> ? ev
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
-    parser.add_argument("--total-timesteps", type=int, default=150_000_000)
+    parser.add_argument("--total-timesteps", type=int, default=10_000_000)
     parser.add_argument("--learning-rate", type=float, default=7.5e-3)
     parser.add_argument("--learning-rate-end", type=float, default=1e-4)  # e-4/e-5
     parser.add_argument("--num-envs", type=int, default=64)
@@ -48,7 +48,7 @@ def parse_args():
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     # Policy clipping - increase if KL too high, decrease if clipfrac too high
     parser.add_argument("--clip-coef", type=float, default=0.25)  # 0.2
-    parser.add_argument("--ent-coef", type=float, default=0.1)  # 0.05
+    parser.add_argument("--ent-coef", type=float, default=0.2)  # 0.05
     parser.add_argument("--ent-coef-end", type=float, default=0.02)
     parser.add_argument("--anneal-ent", action="store_false")
     parser.add_argument("--vf-coef", type=float, default=0.3)
@@ -76,6 +76,12 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--cuda", action="store_false")
     parser.add_argument("--save-path", type=str, default="ppo_tenten.pt")
+    parser.add_argument(
+        "--load-path",
+        type=str,
+        default=None,
+        help="Optional checkpoint to warm-start from",
+    )
     return parser.parse_args()
 
 
@@ -161,7 +167,7 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    envs = gym.vector.AsyncVectorEnv(
+    envs = gym.vector.SyncVectorEnv(
         [make_env(args.seed, i) for i in range(args.num_envs)]
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete)
@@ -172,6 +178,9 @@ def main():
     action_dim = envs.single_action_space.n
 
     agent = Agent(obs_dim, action_dim, args.hidden_dim).to(device)
+    if args.load_path:
+        state_dict = torch.load(args.load_path, map_location=device)
+        agent.load_state_dict(state_dict)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     batch_size = args.num_envs * args.num_steps
@@ -179,7 +188,8 @@ def main():
     num_updates = args.total_timesteps // batch_size
     run_start_time = int(time.time())
     # run name should be hyperparams
-    run_name = f"tenten_ppo_seed{args.seed}_update_epochs:{args.update_epochs}_hd:{args.hidden_dim}_lr:{args.lr_schedule}_{args.learning_rate}_{args.learning_rate_end}_ent:{args.ent_schedule}_{args.ent_coef}_{args.ent_coef_end}_{run_start_time}"
+    loaded = "loaded" if args.load_path else "not_loaded"
+    run_name = f"tenten_ppo_seed{args.seed}_rewardrms_update_epochs:{args.update_epochs}_hd:{args.hidden_dim}_lr:{args.lr_schedule}_{args.learning_rate}_{args.learning_rate_end}_ent:{args.ent_schedule}_{args.ent_coef}_{args.ent_coef_end}_{run_start_time}_{loaded}"
 
     checkpoint_interval = (
         args.checkpoint_interval
@@ -212,6 +222,7 @@ def main():
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
     next_done = torch.zeros(args.num_envs, device=device)
+    reward_rms = None
 
     for update in range(1, num_updates + 1):
         episode_lengths = []
@@ -252,7 +263,11 @@ def main():
             next_done = torch.as_tensor(
                 np.logical_or(terminated, truncated), device=device, dtype=torch.float32
             )
-            rewards[step] = torch.as_tensor(reward, device=device)
+            reward_t = torch.as_tensor(reward, device=device, dtype=torch.float32)
+            if reward_rms is None:
+                reward_rms = reward_t.mean()
+            reward_rms = 0.99 * reward_rms + 0.01 * reward_t.mean()
+            rewards[step] = reward_t / (reward_rms.abs() + 1e-6)
 
             global_step += args.num_envs
             if "final_info" in infos:
