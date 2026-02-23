@@ -1,5 +1,7 @@
 # ten_ten/core/game.py
 
+import numpy as np
+
 
 class Game:
     """
@@ -10,10 +12,13 @@ class Game:
     - Detect terminal when no legal moves exist
     """
 
-    def __init__(self, board, bag, hand_size=3):
+    def __init__(self, board, bag, hand_size=3, hole_bonus=0.5, bump_bonus=0.1):
         self.board = board
         self.bag = bag
         self.hand_size = hand_size
+        # Shaping weights; positive means reducing holes/bumpiness yields positive reward
+        self.hole_bonus = float(hole_bonus)
+        self.bump_bonus = float(bump_bonus)
 
         self.hand = []
         self.score = 0
@@ -100,6 +105,9 @@ class Game:
 
             raise ValueError(f"Illegal move: {piece.pid} at ({r}, {c})")
 
+        # Snapshot before move for shaping
+        grid_before = self.board.grid.copy()
+
         # Apply move on board
         place_info = self.board.place(piece, r, c)
 
@@ -117,11 +125,15 @@ class Game:
 
         # - Reward for placing blocks
         # - Bonus for clearing lines (rows+cols)
-        # We can change this to see if different rewards are better.
         reward = place_info["placed_blocks"]
-        # Double line-clear bonus (was 10x)
         clear_bonus = place_info["cleared_rows"] + place_info["cleared_cols"]
         reward += 10 * clear_bonus
+
+        # Shaping: reward reductions in holes/bumpiness (potential-based delta)
+        holes_before, bump_before = self._board_holes_bumpiness(grid_before)
+        holes_after, bump_after = self._board_holes_bumpiness(self.board.grid)
+        reward += self.hole_bonus * (holes_before - holes_after)
+        reward += self.bump_bonus * (bump_before - bump_after)
 
         self.score += reward
         reward += 10 * clear_bonus
@@ -130,6 +142,32 @@ class Game:
             "piece_id": piece.pid,
             "place_info": place_info,
             "score": self.score,
+            "shaping": {
+                "holes_before": holes_before,
+                "holes_after": holes_after,
+                "bump_before": bump_before,
+                "bump_after": bump_after,
+            },
         }
 
         return self.get_state(), reward, self.done, info
+
+    def _board_holes_bumpiness(self, grid):
+        # grid: (N, N) uint8/bool
+        N = grid.shape[0]
+        holes = 0
+        heights = []
+        for c in range(N):
+            col = grid[:, c]
+            filled = np.where(col != 0)[0]
+            if filled.size == 0:
+                heights.append(0)
+                continue
+            top = filled[0]
+            height = N - top
+            heights.append(height)
+            holes += np.count_nonzero(col[top + 1 :] == 0)
+        bumpiness = 0
+        for i in range(N - 1):
+            bumpiness += abs(heights[i] - heights[i + 1])
+        return holes, bumpiness
