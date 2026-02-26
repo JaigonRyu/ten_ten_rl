@@ -25,13 +25,7 @@ except ImportError:
 
 def parse_args():
     # Next hyperparams to try:
-    # Increase hidden dim if explained variance low @ end
-    # LR + clipping vs model size
-    # vs ENT decay
-    # 0.005 kl, 0.05 clip, 70% ev @ 2k w/ 5e-3->3e-5, 2 layers @ 512, .1->0.01 ent voef, cosine, 0.2 clip coef, 3 update epochs
-    # entropy > 0.1 -> low returns
-    # 2 layer 512 -> 0.7 ev @ 50M
-    # 2 layer 256 -> ? ev
+    # Set to current best hyperparams
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
     parser.add_argument("--total-timesteps", type=int, default=50_000_000)
     parser.add_argument("--learning-rate", type=float, default=5e-4)
@@ -46,12 +40,12 @@ def parse_args():
     parser.add_argument("--wandb-entity", type=str, default=None)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
-    # Policy clipping - increase if KL too high, decrease if clipfrac too high
+    # Policy clipping - decrease if KL too high, increase if clipfrac too high
     parser.add_argument("--clip-coef", type=float, default=0.25)  # 0.2
     parser.add_argument("--ent-coef", type=float, default=0.0005)  # 0.05
     parser.add_argument("--ent-coef-end", type=float, default=0.00005)
     parser.add_argument("--anneal-ent", action="store_false")
-    parser.add_argument("--vf-coef", type=float, default=0.000025) # was using 0.3
+    parser.add_argument("--vf-coef", type=float, default=0.00005) # was using 0.3
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--target-kl", type=float, default=0.03)  # 0.02 before
     parser.add_argument("--hidden-dim", type=int, default=1024)
