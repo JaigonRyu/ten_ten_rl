@@ -127,10 +127,43 @@ class TenTenEnv(gym.Env):
 
 
     def render(self):
-        # Optional: simple ASCII render
-        print(self.game.board.to_ascii())
-        print("Hand:", [p.pid for p in self.game.hand])
-        print("Score:", self.game.score)
+        #Optional: simple ASCII render
+        #print(self.game.board.to_ascii())
+        #print("Hand:", [p.pid for p in self.game.hand])
+        #print("Score:", self.game.score)
+        if not hasattr(self, "_pygame_init"):
+            pygame.init()
+            self.cell_size = 40
+            self.N = 10
+            self.window = pygame.display.set_mode(
+                (self.N * self.cell_size, self.N * self.cell_size)
+            )
+            pygame.display.set_caption("1010 DQN")
+            self._pygame_init = True
+
+        board = self.game.board.grid  # (10,10)
+
+        self.window.fill((30, 30, 30))  # dark background
+
+        for r in range(self.N):
+            for c in range(self.N):
+                rect = pygame.Rect(
+                    c * self.cell_size,
+                    r * self.cell_size,
+                    self.cell_size,
+                    self.cell_size
+                )
+
+                if board[r][c] == 1:
+                    pygame.draw.rect(self.window, (50, 200, 255), rect)
+                else:
+                    pygame.draw.rect(self.window, (60, 60, 60), rect, 1)
+
+        pygame.display.flip()
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
 
     def close(self):
         pass
