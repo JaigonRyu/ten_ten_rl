@@ -33,9 +33,9 @@ def parse_args():
     # 2 layer 512 -> 0.7 ev @ 50M
     # 2 layer 256 -> ? ev
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for TenTen")
-    parser.add_argument("--total-timesteps", type=int, default=10_000_000)
-    parser.add_argument("--learning-rate", type=float, default=7.5e-3)
-    parser.add_argument("--learning-rate-end", type=float, default=1e-4)  # e-4/e-5
+    parser.add_argument("--total-timesteps", type=int, default=50_000_000)
+    parser.add_argument("--learning-rate", type=float, default=5e-4)
+    parser.add_argument("--learning-rate-end", type=float, default=1e-5)  # e-4/e-5
     parser.add_argument("--num-envs", type=int, default=64)
     parser.add_argument("--num-steps", type=int, default=256)
     parser.add_argument("--num-minibatches", type=int, default=8)
@@ -48,24 +48,24 @@ def parse_args():
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     # Policy clipping - increase if KL too high, decrease if clipfrac too high
     parser.add_argument("--clip-coef", type=float, default=0.25)  # 0.2
-    parser.add_argument("--ent-coef", type=float, default=0.2)  # 0.05
-    parser.add_argument("--ent-coef-end", type=float, default=0.02)
+    parser.add_argument("--ent-coef", type=float, default=0.0005)  # 0.05
+    parser.add_argument("--ent-coef-end", type=float, default=0.00005)
     parser.add_argument("--anneal-ent", action="store_false")
-    parser.add_argument("--vf-coef", type=float, default=0.3)
+    parser.add_argument("--vf-coef", type=float, default=0.000025) # was using 0.3
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--target-kl", type=float, default=0.03)  # 0.02 before
-    parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--hidden-dim", type=int, default=1024)
     parser.add_argument(
         "--lr-schedule",
         type=str,
         choices=["linear", "cosine", "none"],
-        default="cosine",
+        default="linear",
     )
     parser.add_argument(
         "--ent-schedule",
         type=str,
         choices=["linear", "cosine", "none"],
-        default="cosine",
+        default="linear",
     )
     parser.add_argument(
         "--checkpoint-interval",
@@ -82,6 +82,7 @@ def parse_args():
         default=None,
         help="Optional checkpoint to warm-start from",
     )
+    parser.add_argument("--norm-rewards", action="store_true")
     return parser.parse_args()
 
 
@@ -109,7 +110,7 @@ def flatten_obs(obs):
     return board.view(board.shape[0], -1)
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+def layer_init(layer, std=0.02, bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
     torch.nn.init.constant_(layer.bias, bias_const)
     return layer
@@ -122,15 +123,16 @@ class Agent(nn.Module):
         self.action_dim = action_dim
         self.hidden_size = hidden_size
         # MLP for flattened board + hand masks (dict observation)
+
         self.net = nn.Sequential(
             layer_init(nn.Linear(obs_dim, self.hidden_size)),
             nn.GELU(),
             layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
             nn.GELU(),
-            # layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
-            # nn.GELU(),
-            # layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
-            # nn.GELU(),
+            #layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
+            #nn.GELU(),
+            #layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
+            #nn.GELU(),
         )
         self.actor = layer_init(nn.Linear(self.hidden_size, self.action_dim), std=0.01)
         self.critic = layer_init(nn.Linear(self.hidden_size, 1))
@@ -189,7 +191,8 @@ def main():
     run_start_time = int(time.time())
     # run name should be hyperparams
     loaded = "loaded" if args.load_path else "not_loaded"
-    run_name = f"tenten_ppo_seed{args.seed}_rewardrms_update_epochs:{args.update_epochs}_hd:{args.hidden_dim}_lr:{args.lr_schedule}_{args.learning_rate}_{args.learning_rate_end}_ent:{args.ent_schedule}_{args.ent_coef}_{args.ent_coef_end}_{run_start_time}_{loaded}"
+    norm_rew = "norm-rewards" if args.norm_rewards else ""
+    run_name = f"TEST:tenten_ppo_seed{args.seed}_2xlayer_normadv_clip-coef:{args.clip_coef}__{norm_rew}_vf-coef:{args.vf_coef}_update_epochs:{args.update_epochs}_hd:{args.hidden_dim}_lr:{args.lr_schedule}_{args.learning_rate}_{args.learning_rate_end}_ent:{args.ent_schedule}_{args.ent_coef}_{args.ent_coef_end}_{run_start_time}_{loaded}"
 
     checkpoint_interval = (
         args.checkpoint_interval
@@ -264,10 +267,13 @@ def main():
                 np.logical_or(terminated, truncated), device=device, dtype=torch.float32
             )
             reward_t = torch.as_tensor(reward, device=device, dtype=torch.float32)
-            if reward_rms is None:
-                reward_rms = reward_t.mean()
-            reward_rms = 0.99 * reward_rms + 0.01 * reward_t.mean()
-            rewards[step] = reward_t / (reward_rms.abs() + 1e-6)
+            if args.norm_rewards:
+                if reward_rms is None:
+                    reward_rms = reward_t.mean()
+                reward_rms = 0.99 * reward_rms + 0.01 * reward_t.mean()
+                rewards[step] = reward_t / (reward_rms.abs() + 1e-6)
+            else:
+                rewards[step] = reward_t
 
             global_step += args.num_envs
             if "final_info" in infos:
@@ -339,9 +345,9 @@ def main():
                     )
 
                 mb_adv = b_advantages[mb_inds]
-                # if mb_adv.std() > 0:
-                #     mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std
-                #     () + 1e-8)
+                if mb_adv.std() > 0:
+                    mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std
+                    () + 1e-8)
                 mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
                 pg_loss1 = -mb_adv * ratio
@@ -390,10 +396,10 @@ def main():
         update_time = update_end - rollout_end
         print(
             f"update={update}/{num_updates} "
-            f"loss={loss.item():.3f} "
-            f"pg={pg_loss.item():.3f} "
-            f"vf={v_loss.item():.3f} "
-            f"ent={entropy_loss.item():.3f} "
+            f"loss={loss.item():.4f} "
+            f"pg={pg_loss.item():.4f} "
+            f"vf={v_loss.item() * args.vf_coef:.4f} "
+            f"ent={entropy_loss.item() * args.ent_coef:.4f} "
             f"kl={approx_kl.item():.4f} "
             f"ev={explained_var:.3f} "
             f"SPS={sps} "
@@ -411,8 +417,8 @@ def main():
                     "charts/global_step": global_step,
                     "losses/total": loss.item(),
                     "losses/pg": pg_loss.item(),
-                    "losses/vf": v_loss.item(),
-                    "losses/entropy": entropy_loss.item(),
+                    "losses/vf": v_loss.item() * args.vf_coef,
+                    "losses/entropy": entropy_loss.item() * args.ent_coef,
                     "losses/kl": approx_kl.item(),
                     "losses/clipfrac": float(np.mean(clipfracs)),
                     "losses/explained_variance": explained_var,
