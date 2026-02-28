@@ -51,17 +51,34 @@ def main():
         help="Path to DQN checkpoint (state_dict)",
     )
     parser.add_argument("--dqn-hidden", type=int, default=512)
+    parser.add_argument("--run-random", action="store_true")
+    parser.add_argument("--run-greedy", action="store_true")
+    parser.add_argument("--run-ppo", action="store_true")
+    parser.add_argument("--run-dqn", action="store_true")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    for adversarial, policy in itertools.product([True, False], ["greedy", "random"]):
+    basic_runs = []
+    if args.run_random:
+        basic_runs.append("random")
+    if args.run_greedy:
+        basic_runs.append("greedy")
+        
+    for adversarial, policy in itertools.product([True, False], basic_runs):
         start_time = time.time()
-        scores = [play_episode(make_env(adversarial=adversarial, seed=i), policy, seed=i) for i in range(args.episodes)]
+        scores = [
+            play_episode(make_env(adversarial=adversarial, seed=i), policy, seed=i)
+            for i in range(args.episodes)
+        ]
         end_time = time.time()
         np.save(f"{adversarial}_{policy}_scores.npy", scores)
         np.save(f"{adversarial}_{policy}_times.npy", end_time - start_time)
-        print(f"{adversarial}_{policy}: {np.mean(scores):.2f} ± {np.std(scores):.2f} in {end_time - start_time:.2f} seconds")
+        print(
+            f"{adversarial}_{policy}: {np.mean(scores):.2f} ± {np.std(scores):.2f} in {end_time - start_time:.2f} seconds"
+        )
+
+    exit()
 
 
 if __name__ == "__main__":
