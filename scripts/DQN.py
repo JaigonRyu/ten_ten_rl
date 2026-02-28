@@ -264,6 +264,9 @@ def greedy_action(net, obs, mask):
         return int(torch.argmax(q).item())
     
 if __name__ == "__main__":
+    WATCH_EVERY = 1e10       # watch every 10 episodes
+    WATCH_MAX_STEPS = 300
+    WATCH_DELAY = 0.05
 
     USE_PER = True #PER USE
     best_return = -float("inf")
@@ -273,21 +276,23 @@ if __name__ == "__main__":
 
     online = QNet().to(DEVICE)
     target = QNet().to(DEVICE)
+    best_model = QNet().to(DEVICE)
     target.load_state_dict(online.state_dict())
+    best_model.load_state_dict(online.state_dict())
 
     optimizer = optim.Adam(online.parameters(), lr=1e-3)
     rb = ReplayBuffer(capacity=100_000)
     if USE_PER:
-        rb = PrioritizedReplayBuffer(capacity=100_000, alpha=0.6)
+        rb = PrioritizedReplayBuffer(capacity=300_000, alpha=0.6)
     else:
-        rb = ReplayBuffer(capacity=100_000)
+        rb = ReplayBuffer(capacity=300_000)
 
     #NUM_EPISODES = 1000       # <- stop condition
     batch_size = 64
     gamma = 0.99
     ep = 0  #training purposes
 
-    MAX_STEPS = 300000   # total transitions to collect (tune this)
+    MAX_STEPS = 1_000_000   # total transitions to collect (tune this)
     #NUM_EPISODES = 0 
     #start_learning = 200
     #target_update_every = 500
@@ -299,7 +304,7 @@ if __name__ == "__main__":
 
     epsilon = 1.0
     epsilon_min = 0.05
-    epsilon_decay_steps = 300000
+    epsilon_decay_steps = 800000
 
     global_step = 0
 
@@ -371,13 +376,9 @@ if __name__ == "__main__":
             best_return = ep_return
             best_step = global_step
             print(f"new best return={best_return} return={best_step}") 
-        
+            best_model.load_state_dict(online.state_dict())
 
         # Watch one greedy game (prints ASCII each step)
-        
-        WATCH_EVERY = 10       # watch every 10 episodes
-        WATCH_MAX_STEPS = 300
-        WATCH_DELAY = 0.05
 
         if ep % WATCH_EVERY == 0:
             env_watch = make_env(seed=123)
@@ -403,3 +404,4 @@ if __name__ == "__main__":
         ep += 1
 
     print(f"highest return={best_return} return={best_step}") 
+    torch.save(best_model.state_dict(), f"best_dqn_model_{best_return:.2f}.pt")
