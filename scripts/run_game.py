@@ -85,25 +85,15 @@ def evaluate_policy(
 def main():
     parser = argparse.ArgumentParser(description="Run TenTen baselines")
     parser.add_argument("--episodes", type=int, default=10000)
-    parser.add_argument(
-        "--ppo-path",
-        type=str,
-        required=False,
-        help="Path to PPO checkpoint (state_dict)",
-    )
-    parser.add_argument("--ppo-hidden", type=int, default=512)
-    parser.add_argument(
-        "--dqn-path",
-        type=str,
-        required=False,
-        help="Path to DQN checkpoint (state_dict)",
-    )
-    parser.add_argument("--dqn-hidden", type=int, default=512)
+    parser.add_argument("--ppo-hidden", type=int, default=1024)
+    # parser.add_argument("--dqn-hidden", type=int, default=1024)
     parser.add_argument("--run-random", action="store_true")
     parser.add_argument("--run-greedy", action="store_true")
     parser.add_argument("--run-ppo", action="store_true")
     parser.add_argument("--run-dqn", action="store_true")
     args = parser.parse_args()
+    ppo_path = "ten_ten_rl/models/score502_1772003097_ppo_tenten.pt"
+    dqn_path = ""
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -133,13 +123,11 @@ def main():
     env0.close()
 
     if args.run_ppo:
-        if not args.ppo_path:
-            raise ValueError("Provide --ppo-path when --run-ppo is set")
         obs_dim = flatten_obs(obs0).numel()
         ppo_agent = PPOAgent(obs_dim, action_dim, hidden_size=args.ppo_hidden).to(
             device
         )
-        ppo_agent.load_state_dict(torch.load(args.ppo_path, map_location=device))
+        ppo_agent.load_state_dict(torch.load(ppo_path, map_location=device))
         ppo_agent.eval()
 
         def ppo_greedy_policy(obs, mask):
@@ -162,10 +150,8 @@ def main():
         )
 
     if args.run_dqn:
-        if not args.dqn_path:
-            raise ValueError("Provide --dqn-path when --run-dqn is set")
         dqn_agent = DQNAgent(n_actions=action_dim).to(device)
-        dqn_agent.load_state_dict(torch.load(args.dqn_path, map_location=device))
+        dqn_agent.load_state_dict(torch.load(dqn_path, map_location=device))
         dqn_agent.eval()
 
         def dqn_greedy_policy(obs, mask):
