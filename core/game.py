@@ -122,6 +122,7 @@ class Game:
         info = {
             "piece_id": piece.pid,
             "place_info": place_info,
+            "score": self.score
         }
 
         return self.get_state(), reward, self.done, info

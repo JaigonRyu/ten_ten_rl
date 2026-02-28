@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument("--ent-coef", type=float, default=0.0005)  # 0.05
     parser.add_argument("--ent-coef-end", type=float, default=0.00005)
     parser.add_argument("--anneal-ent", action="store_false")
-    parser.add_argument("--vf-coef", type=float, default=0.00005) # was using 0.3
+    parser.add_argument("--vf-coef", type=float, default=0.00005)  # was using 0.3
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
     parser.add_argument("--target-kl", type=float, default=0.03)  # 0.02 before
     parser.add_argument("--hidden-dim", type=int, default=1024)
@@ -123,10 +123,10 @@ class Agent(nn.Module):
             nn.GELU(),
             layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
             nn.GELU(),
-            #layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
-            #nn.GELU(),
-            #layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
-            #nn.GELU(),
+            # layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
+            # nn.GELU(),
+            # layer_init(nn.Linear(self.hidden_size, self.hidden_size)),
+            # nn.GELU(),
         )
         self.actor = layer_init(nn.Linear(self.hidden_size, self.action_dim), std=0.01)
         self.critic = layer_init(nn.Linear(self.hidden_size, 1))
@@ -340,9 +340,7 @@ def main():
 
                 mb_adv = b_advantages[mb_inds]
                 if mb_adv.std() > 0:
-                    mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std
-                    () + 1e-8)
-                mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                    mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
 
                 pg_loss1 = -mb_adv * ratio
                 pg_loss2 = -mb_adv * torch.clamp(
