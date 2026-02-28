@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import time
 import pygame
+import wandb
 t0 = time.time()
 last_t = t0
 last_step = 0
@@ -269,6 +270,7 @@ if __name__ == "__main__":
     WATCH_DELAY = 0.05
 
     USE_PER = True #PER USE
+
     best_return = -float("inf")
     best_step = 0
     #Creates the 1010 environment: board + bag + game + gym wrapper.
@@ -280,7 +282,8 @@ if __name__ == "__main__":
     target.load_state_dict(online.state_dict())
     best_model.load_state_dict(online.state_dict())
 
-    optimizer = optim.Adam(online.parameters(), lr=1e-3)
+    lr = 1e-4
+    optimizer = optim.Adam(online.parameters(), lr=lr)
     rb = ReplayBuffer(capacity=100_000)
     if USE_PER:
         rb = PrioritizedReplayBuffer(capacity=300_000, alpha=0.6)
@@ -307,6 +310,15 @@ if __name__ == "__main__":
     epsilon_decay_steps = 800000
 
     global_step = 0
+    
+    wandb.init(project="tenten-dqn", config={
+        "lr": lr,
+        "gamma": gamma,
+        "use_per": USE_PER,
+        "batch_size": batch_size,
+        "target_update_every": target_update_every,
+        "start_learning": start_learning,
+    })
 
 
     while global_step < MAX_STEPS: #for training purpose
@@ -316,6 +328,7 @@ if __name__ == "__main__":
         mask = env.action_mask().astype(np.bool_)
         ep_return = 0.0
         done = False
+        ep_steps = 0
 
         while not done and global_step < MAX_STEPS: #for actual training
         #while not done:
@@ -335,6 +348,7 @@ if __name__ == "__main__":
             mask = next_mask
             ep_return += reward
             global_step += 1 #for training purpose
+            ep_steps += 1
 
             if global_step % LOG_EVERY_STEPS == 0:
                 now = time.time()
@@ -342,6 +356,7 @@ if __name__ == "__main__":
                 dt = now - last_t
                 sps = steps_done / max(dt, 1e-9)  # steps per second
                 print(f"[speed] steps={global_step}  {sps:.1f} steps/sec")
+                wandb.log({"perf/steps_per_sec": sps}, step=global_step)
                 last_t = now
                 last_step = global_step
 
@@ -354,6 +369,7 @@ if __name__ == "__main__":
                 if not USE_PER:
                     batch = rb.sample(batch_size)
                     loss = dqn_update(online, target, optimizer, batch, gamma=gamma)
+                    wandb.log({"loss/td": loss}, step=global_step)
 
                 else:
                     beta0, beta1 = 0.4, 1.0
@@ -364,19 +380,29 @@ if __name__ == "__main__":
                     loss, td_errors = dqn_update_per(online, target, optimizer, batch, weights, gamma=gamma)
                     #rb.update_priorities(idxs, td_errors) uniform
                     rb.update_priorities(idxs, td_errors.tolist())
+                    wandb.log({"loss/td": loss, "per/beta": beta}, step=global_step)
 
             # update target network
             if global_step % target_update_every == 0:
                 target.load_state_dict(online.state_dict())
             
-
         print(f"episode={ep:03d} return={ep_return:.1f} eps={epsilon:.3f} buffer={len(rb)}")
+        wandb.log(
+            {
+                "charts/episode_return": ep_return,
+                "charts/episode_length": ep_steps,
+                "charts/epsilon": epsilon,
+                "charts/buffer": len(rb),
+            },
+            step=global_step,
+        )
         
         if ep_return>best_return:
             best_return = ep_return
             best_step = global_step
             print(f"new best return={best_return} return={best_step}") 
             best_model.load_state_dict(online.state_dict())
+            wandb.log({"charts/best_return": best_return}, step=global_step)
 
         # Watch one greedy game (prints ASCII each step)
 
@@ -405,3 +431,4 @@ if __name__ == "__main__":
 
     print(f"highest return={best_return} return={best_step}") 
     torch.save(best_model.state_dict(), f"best_dqn_model_{best_return:.2f}.pt")
+    wandb.finish()
