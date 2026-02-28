@@ -93,7 +93,7 @@ def main():
     parser.add_argument("--run-dqn", action="store_true")
     args = parser.parse_args()
     ppo_path = "ten_ten_rl/models/score502_1772003097_ppo_tenten.pt"
-    dqn_path = ""
+    dqn_path = "ten_ten_rl/models/dqn_model.pt"
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -140,14 +140,15 @@ def main():
                 action = torch.argmax(logits).item()
             return action
 
-        scores, elapsed = evaluate_policy(
-            args.episodes, ppo_greedy_policy, adversarial=adversarial
-        )
-        np.save(f"ppo_scores_{adversarial}.npy", scores)
-        np.save(f"ppo_elapsed_{adversarial}.npy", elapsed)
-        print(
-            f"ppo: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
-        )
+        for adversarial in [True, False]:
+            scores, elapsed = evaluate_policy(
+                args.episodes, ppo_greedy_policy, adversarial=adversarial
+            )
+            np.save(f"ppo_scores_{adversarial}.npy", scores)
+            np.save(f"ppo_elapsed_{adversarial}.npy", elapsed)
+            print(
+                f"ppo: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
+            )
 
     if args.run_dqn:
         dqn_agent = DQNAgent(n_actions=action_dim).to(device)
@@ -162,14 +163,15 @@ def main():
                 q[~mask_t] = -1e9
                 return int(torch.argmax(q).item())
 
-        scores, elapsed = evaluate_policy(
-            args.episodes, dqn_greedy_policy, adversarial=adversarial
-        )
-        np.save(f"dqn_scores_{adversarial}.npy", scores)
-        np.save(f"dqn_elapsed_{adversarial}.npy", elapsed)
-        print(
-            f"dqn: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
-        )
+        for adversarial in [True, False]:
+            scores, elapsed = evaluate_policy(
+                args.episodes, dqn_greedy_policy, adversarial=adversarial
+            )
+            np.save(f"dqn_scores_{adversarial}.npy", scores)
+            np.save(f"dqn_elapsed_{adversarial}.npy", elapsed)
+            print(
+                f"dqn: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
+            )
 
 
 if __name__ == "__main__":
