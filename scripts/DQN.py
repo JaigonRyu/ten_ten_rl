@@ -270,7 +270,6 @@ if __name__ == "__main__":
     WATCH_DELAY = 0.05
 
     USE_PER = True #PER USE
-
     best_return = -float("inf")
     best_step = 0
     #Creates the 1010 environment: board + bag + game + gym wrapper.
