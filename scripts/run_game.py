@@ -115,13 +115,14 @@ def main():
 
     for adversarial, policy in itertools.product([True, False], basic_runs):
         start_time = time.time()
-        scores = [
-            play_episode(make_env(adversarial=adversarial, seed=i), policy, seed=i)
-            for i in range(args.episodes)
-        ]
+        scores = []
+        for i in range(args.episodes):
+            scores.append(
+                play_episode(make_env(adversarial=adversarial, seed=i), policy, seed=i)
+            )
         end_time = time.time()
         np.save(f"{adversarial}_{policy}_scores.npy", scores)
-        np.save(f"{adversarial}_{policy}_times.npy", end_time - start_time)
+        np.save(f"{adversarial}_{policy}_elapsed.npy", end_time - start_time)
         print(
             f"{adversarial}_{policy}: {np.mean(scores):.2f} ± {np.std(scores):.2f} in {end_time - start_time:.2f} seconds"
         )
@@ -155,7 +156,7 @@ def main():
             args.episodes, ppo_greedy_policy, adversarial=adversarial
         )
         np.save(f"ppo_scores_{adversarial}.npy", scores)
-        np.save(f"ppo_times_{adversarial}.npy", elapsed)
+        np.save(f"ppo_elapsed_{adversarial}.npy", elapsed)
         print(
             f"ppo: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
         )
@@ -179,7 +180,7 @@ def main():
             args.episodes, dqn_greedy_policy, adversarial=adversarial
         )
         np.save(f"dqn_scores_{adversarial}.npy", scores)
-        np.save(f"dqn_times_{adversarial}.npy", elapsed)
+        np.save(f"dqn_elapsed_{adversarial}.npy", elapsed)
         print(
             f"dqn: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
         )
