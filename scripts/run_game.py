@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
 
+from ten_ten_rl.core.pieces import PIECE_LIBRARY
+from ten_ten_rl.core.adversarial_game import AdversarialGame
 from ten_ten_rl.core.board import Board
 from ten_ten_rl.core.bag import PieceBag
 from ten_ten_rl.core.game import Game
@@ -14,6 +16,18 @@ from ten_ten_rl.env.ten_ten_env import TenTenEnv
 
 from ten_ten_rl.scripts.ppo_cleanrl import Agent as PPOAgent
 from ten_ten_rl.scripts.DQN import QNet as DQNAgent
+
+
+def make_env(adversarial: bool, seed: int) -> TenTenEnv:
+    board = Board()
+    bag = PieceBag(PIECE_LIBRARY, seed=seed)
+    if adversarial:
+        game = AdversarialGame(board, bag)
+    else:
+        game = Game(board, bag)
+    env = TenTenEnv(game, invalid_move_penalty=-0.1)
+    env.reset(seed=seed)
+    return env
 
 
 def main():
@@ -25,18 +39,17 @@ def main():
         required=True,
         help="Path to PPO checkpoint (state_dict)",
     )
-    parser.add_argument("--ppo-hidden", type=int, default=1024)
+    parser.add_argument("--ppo-hidden", type=int, default=512)
     parser.add_argument(
         "--dqn-path",
         type=str,
         required=True,
         help="Path to DQN checkpoint (state_dict)",
     )
-    # parser.add_argument("--dqn-hidden", type=int, default=512)
-    parser.add_argument("--device", type=str, default="gpu")
+    parser.add_argument("--dqn-hidden", type=int, default=512)
+    parser.add_argument("--device", type=str, default="cpu")
     args = parser.parse_args()
 
-    device = torch.device(args.device)
 
 
 if __name__ == "__main__":
