@@ -34,6 +34,54 @@ def make_env(adversarial: bool, seed: int) -> TenTenEnv:
     return env
 
 
+def flatten_obs(obs: dict) -> torch.Tensor:
+    board = torch.as_tensor(obs["board"], dtype=torch.float32)
+    hand = torch.as_tensor(obs["hand_masks"], dtype=torch.float32)
+    return torch.cat([board.reshape(-1), hand.reshape(-1)], dim=0)
+
+
+def obs_to_torch(obs: dict, device: str):
+    board = (
+        torch.as_tensor(obs["board"], dtype=torch.float32, device=device)
+        .unsqueeze(0)
+        .unsqueeze(0)
+    )
+    hand = torch.as_tensor(
+        obs["hand_masks"], dtype=torch.float32, device=device
+    ).unsqueeze(0)
+    return board, hand
+
+
+def evaluate_policy(
+    episodes: int,
+    policy_fn: Callable[[dict, np.ndarray], int],
+    seed_offset: int = 0,
+    adversarial: bool = False,
+) -> float:
+    scores = []
+    times = []
+    for ep in range(episodes):
+        start_time = time.time()
+        env = make_env(adversarial=adversarial, seed=seed_offset + ep)
+        obs, _ = env.reset(seed=seed_offset + ep)
+        done = False
+        total = 0.0
+        steps = 0
+        while not done:
+            mask = env.action_mask().astype(bool)
+            action = policy_fn(obs, mask)
+            if action is None:
+                break
+            obs, reward, terminated, truncated, _ = env.step(action)
+            total += reward
+            steps += 1
+            done = terminated or truncated
+        scores.append(float(total))
+        times.append(time.time() - start_time)
+        env.close()
+    return scores, np.sum(times)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run TenTen baselines")
     parser.add_argument("--episodes", type=int, default=10000)
@@ -58,13 +106,13 @@ def main():
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+
     basic_runs = []
     if args.run_random:
         basic_runs.append("random")
     if args.run_greedy:
         basic_runs.append("greedy")
-        
+
     for adversarial, policy in itertools.product([True, False], basic_runs):
         start_time = time.time()
         scores = [
@@ -78,7 +126,63 @@ def main():
             f"{adversarial}_{policy}: {np.mean(scores):.2f} ± {np.std(scores):.2f} in {end_time - start_time:.2f} seconds"
         )
 
-    exit()
+    env0 = make_env(adversarial=False, seed=0)
+    obs0, _ = env0.reset(seed=0)
+    action_dim = env0.action_space.n
+    env0.close()
+
+    if args.run_ppo:
+        if not args.ppo_path:
+            raise ValueError("Provide --ppo-path when --run-ppo is set")
+        obs_dim = flatten_obs(obs0).numel()
+        ppo_agent = PPOAgent(obs_dim, action_dim, hidden_size=args.ppo_hidden).to(
+            device
+        )
+        ppo_agent.load_state_dict(torch.load(args.ppo_path, map_location=device))
+        ppo_agent.eval()
+
+        def ppo_greedy_policy(obs, mask):
+            obs_t = flatten_obs(obs).to(device).unsqueeze(0)
+            mask_t = torch.as_tensor(mask, dtype=torch.bool, device=device).unsqueeze(0)
+            with torch.no_grad():
+                hidden = ppo_agent.net(obs_t)
+                logits = ppo_agent.actor(hidden)
+                logits = logits.masked_fill(~mask_t, -1e9)
+                action = torch.argmax(logits).item()
+            return action
+
+        scores, elapsed = evaluate_policy(
+            args.episodes, ppo_greedy_policy, adversarial=adversarial
+        )
+        np.save(f"ppo_scores_{adversarial}.npy", scores)
+        np.save(f"ppo_times_{adversarial}.npy", elapsed)
+        print(
+            f"ppo: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
+        )
+
+    if args.run_dqn:
+        if not args.dqn_path:
+            raise ValueError("Provide --dqn-path when --run-dqn is set")
+        dqn_agent = DQNAgent(n_actions=action_dim).to(device)
+        dqn_agent.load_state_dict(torch.load(args.dqn_path, map_location=device))
+        dqn_agent.eval()
+
+        def dqn_greedy_policy(obs, mask):
+            board_t, hand_t = obs_to_torch(obs, device)
+            with torch.no_grad():
+                q = dqn_agent(board_t, hand_t).squeeze(0)
+                mask_t = torch.as_tensor(mask, dtype=torch.bool, device=device)
+                q[~mask_t] = -1e9
+                return int(torch.argmax(q).item())
+
+        scores, elapsed = evaluate_policy(
+            args.episodes, dqn_greedy_policy, adversarial=adversarial
+        )
+        np.save(f"dqn_scores_{adversarial}.npy", scores)
+        np.save(f"dqn_times_{adversarial}.npy", elapsed)
+        print(
+            f"dqn: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
+        )
 
 
 if __name__ == "__main__":
