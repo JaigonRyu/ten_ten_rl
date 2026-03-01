@@ -61,6 +61,8 @@ def evaluate_policy(
     scores = []
     times = []
     for ep in range(episodes):
+        if ep % 100 == 0:
+            print(f"Evaluating policy for {ep} episodes")
         start_time = time.time()
         env = make_env(adversarial=adversarial, seed=seed_offset + ep)
         obs, _ = env.reset(seed=seed_offset + ep)
@@ -91,9 +93,11 @@ def main():
     parser.add_argument("--run-greedy", action="store_true")
     parser.add_argument("--run-ppo", action="store_true")
     parser.add_argument("--run-dqn", action="store_true")
+    parser.add_argument("--run-dqn-nopr", action="store_true")
     args = parser.parse_args()
     ppo_path = "ten_ten_rl/models/score502_1772003097_ppo_tenten.pt"
     dqn_path = "ten_ten_rl/models/dqn_model.pt"
+    dqn_path_nopr = "ten_ten_rl/models/False_best_dqn_model_1038.00.pt"
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -171,6 +175,34 @@ def main():
             np.save(f"dqn_elapsed_{adversarial}.npy", elapsed)
             print(
                 f"dqn: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
+            )
+
+    if args.run_dqn_nopr:
+        dqn_agent = DQNAgent(n_actions=action_dim).to(device)
+        dqn_agent.load_state_dict(torch.load(dqn_path_nopr, map_location=device))
+        dqn_agent.eval()
+
+        def dqn_greedy_policy(obs, mask):
+            board_t, hand_t = obs_to_torch(obs, device)
+            with torch.no_grad():
+                q = dqn_agent(board_t, hand_t).squeeze(0)
+                mask_t = torch.as_tensor(mask, dtype=torch.bool, device=device)
+                q[~mask_t] = -1e9
+                return int(torch.argmax(q).item())
+
+        for adversarial in [True, False]:
+            if adversarial:
+                scores, elapsed = evaluate_policy(
+                    1, dqn_greedy_policy, adversarial=adversarial
+                )
+            else:
+                scores, elapsed = evaluate_policy(
+                    args.episodes, dqn_greedy_policy, adversarial=adversarial
+                )
+            np.save(f"nopr_dqn_scores_{adversarial}.npy", scores)
+            np.save(f"nopr_dqn_elapsed_{adversarial}.npy", elapsed)
+            print(
+                f"nopr_dqn: mean={np.mean(scores):.2f} std={np.std(scores):.2f} time={elapsed:.2f}s"
             )
 
 

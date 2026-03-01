@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 
 
 def get_model_name(name: str) -> str:
+    if "nopr" in name:
+        return "DQN"
     if "greedy" in name:
         name = "Greedy"
     if "random" in name:
@@ -13,8 +15,9 @@ def get_model_name(name: str) -> str:
     if "ppo" in name:
         name = "PPO"
     if "dqn" in name:
-        name = "DQN"
+        name = "DQN-PR"
     return name
+
 
 def summarize_scores(scores: np.ndarray) -> dict:
     return {
@@ -78,6 +81,7 @@ def main():
         scores = np.load(sf)
 
         if args.aggregate_adversarial and "True" in name:
+            name = get_model_name(name)
             adversarial_scores.append(scores)
             adversarial_names.append(name)
             tokens = name.split("_")
